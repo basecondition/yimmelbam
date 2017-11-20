@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+set -e
+
+REDAXO_VERSION=5.4.0
+REDAXO_SHA=bdf19a343d91bb23ff5f8a7644af54c643bebd2b
+PWDPATH=$(pwd -P)
+REX_BACKEND="1"
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}
+ __     _______ __  __ __  __ ______ _      ____          __  __
+ \ \   / /_   _|  \/  |  \/  |  ____| |    |  _ \   /\   |  \/  |
+  \ \_/ /  | | | \  / | \  / | |__  | |    | |_) | /  \  | \  / |
+   \   /   | | | |\/| | |\/| |  __| | |    |  _ < / /\ \ | |\/| |
+    | |   _| |_| |  | | |  | | |____| |____| |_) / ____ \| |  | |
+    |_|  |_____|_|  |_|_|  |_|______|______|____/_/    \_\_|  |_|
+
+${NC}"
+
+# rename env
+if [ -f .env.dist ]; then
+    mv .env.dist .env
+    echo ".env.dist was renamed to .env"
+fi
+
+# thanks @schuer
+# https://github.com/FriendsOfREDAXO/redaxo-mit-docker/blob/master/docker/php-apache/Dockerfile#L29-L35
+set -e
+# make tmp folders
+if [ ! -d ./tmp ]; then
+    mkdir tmp/
+    mkdir ./tmp/redaxo
+fi
+# load redaxo
+curl -Ls -o ./tmp/redaxo/redaxo_${REDAXO_VERSION}.zip https://github.com/redaxo/redaxo/releases/download/${REDAXO_VERSION}/redaxo_${REDAXO_VERSION}.zip
+echo "${REDAXO_SHA} *./tmp/redaxo/redaxo_${REDAXO_VERSION}.zip" | shasum -c -a 256
+unzip -oq ./tmp/redaxo/redaxo_${REDAXO_VERSION}.zip -d ./public
+
+echo "Redaxo 5.4.0 was sussessful loaded and unzipped into the public folder"
+
+# .GIT FILES
+if [ -f .git ]
+then
+    read -p "Do your want remove .git? [yes]:" answer
+    case "$answer" in
+            Yes|yes|Y|y|"")
+                # GIT - remove .git from the fos repository
+                rm -rf .git
+
+                echo ".git was successful removed"
+            ;;
+            No|no|N|n)
+                echo ".git was not removed"
+            ;;
+            *)
+                echo ".git was not removed"
+            ;;
+    esac
+fi
+
+# YIMMELYAM redaxo backend move
+read -p "Do you want move the redaxo backend out of the public folder? [yes]:" answer
+case "$answer" in
+        Yes|yes|Y|y|"")
+            # thanks @tbaddade
+            # https://github.com/yakamara/yak
+            mkdir bin
+            mkdir src
+            mkdir var
+
+            mv public/redaxo/bin/* bin
+            mv public/redaxo/cache var
+            mv public/redaxo/data var
+            mv public/redaxo/src/addons src
+            mv public/redaxo/src/core src
+
+            cp setup/addon.project.boot.php src/addons/project/boot.php
+            cp setup/console bin/console
+            cp setup/deploy.php deploy.php
+            cp setup/index.backend.php public/redaxo/index.php
+            cp setup/index.frontend.php public/index.php
+            cp setup/path_provider.php src/path_provider.php
+
+            rm -rf public/redaxo/bin
+            rm -rf public/redaxo/src
+
+            REX_BACKEND="2"
+
+            echo "redaxo backend was sussessful moved"
+
+            # set symlinks
+            mkdir -p ./var/data/addons/developer
+            ln -s $PWDPATH/var/data/addons/developer $PWDPATH/source/developer
+            ln -s $PWDPATH/src/addons/project/lib $PWDPATH/source/lib
+
+            echo "symlinks was successful added"
+        ;;
+        No|no|N|n)
+            # set symlinks
+            mkdir -p ./public/redaxo/data/addons/developer
+            ln -s $PWDPATH/public/redaxo/data/addons/developer $PWDPATH/source/developer
+            ln -s $PWDPATH/public/redaxo/src/addons/project/lib $PWDPATH/source/lib
+
+            echo "symlinks was successful added"
+        ;;
+        *)
+            echo ""
+        ;;
+esac
+
+
+read -p "Load FOS addons [mform mblock bloecks developer multiupload redactor2 accessdenied undo adminer]:" repos
+
+if [ -z "$repos" ]; then
+    repos=("mform" "mblock" "bloecks" "developer" "multiupload" "redactor2" "accessdenied" "undo" "adminer")
+fi
+
+for repo in ${repos[@]}
+do
+    set -e
+    curl -Ls -o ./tmp/${repo}_repo.json https://api.github.com/repos/FriendsOfREDAXO/${repo}/releases/latest
+    zipball_url=`php -r "echo json_decode(file_get_contents('./tmp/${repo}_repo.json'))->zipball_url;"`
+    curl -Ls -o ./tmp/${repo}.zip ${zipball_url}
+    unzip -oq ./tmp/${repo}.zip -d ./tmp
+    if [ "$REX_BACKEND" == "2" ]; then mv ./tmp/*${repo}*/ ./src/addons/${repo}/; else mv ./tmp/*${repo}*/ ./public/redaxo/src/addons/${repo}/; fi
+
+    echo "${repo} was successful loaded and unzipped into the addon folder"
+
+done
+
+# remove
+rm -rf setup
+rm -rf tmp
+
+# execute yarn
+yarn
